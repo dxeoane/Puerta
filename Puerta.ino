@@ -56,9 +56,12 @@ void loop() {
 // Estos indices indican la posición que ocupan dentro de la EEPROM cada valor
 #define EEPROM_INDEX_WIFI_SSID      0
 #define EEPROM_INDEX_WIFI_PASSWORD  1
+#define EEPROM_INDEX_WIFI_IP        2
+#define EEPROM_INDEX_WIFI_GATEWAY   3
+#define EEPROM_INDEX_WIFI_SUBNET    4
 
 void EEPROMSetup() {
-  EEPROM.begin(2 * EEPROM_VALUE_SIZE);
+  EEPROM.begin(5 * EEPROM_VALUE_SIZE);
 }
 
 // Guarda un valor en la EEPROM. Si el tamaño excede EEPROM_VALUE_SIZE, se corta
@@ -92,13 +95,29 @@ void wifiConnect() {
 
   // Estos dos valores lod vamos a leer de la EEPROM deben tener como minimo el tamaño EEPROM_VALUE_SIZE + 1
   char ssid[EEPROM_VALUE_SIZE + 1];
-  char password[EEPROM_VALUE_SIZE + 1];
+  char password[EEPROM_VALUE_SIZE + 1];  
   
   readValue(EEPROM_INDEX_WIFI_SSID, ssid);
-  readValue(EEPROM_INDEX_WIFI_PASSWORD, password);
+  readValue(EEPROM_INDEX_WIFI_PASSWORD, password);  
 
   Serial.printf("Conectando con: %s\n", ssid);
   WiFi.mode(WIFI_STA);
+
+  // Comprobamos si hemos configurado un ip fija
+  char value[EEPROM_VALUE_SIZE + 1];
+  IPAddress ip;   
+  readValue(EEPROM_INDEX_WIFI_IP, value);
+  if (ip.fromString(value)){
+    IPAddress gateway;
+    readValue(EEPROM_INDEX_WIFI_GATEWAY, value);
+    if (gateway.fromString(value)){
+      IPAddress subnet;
+      if (subnet.fromString(value)) {
+        WiFi.config(ip, gateway, subnet);
+      }
+    }
+  }
+  
   WiFi.begin(ssid, password);
 
   // Cambiamos el estado del dispositivo a "Conectando"
@@ -117,8 +136,12 @@ void wifiConnect() {
   } else {
     state = STATE_CONNECTED;
     Serial.println("Conectado!");
-    Serial.print("IP Address: ");
+    Serial.print("Mi IP es: ");
     Serial.println(WiFi.localIP());
+    Serial.print("Gateway: ");
+    Serial.println(WiFi.gatewayIP());
+    Serial.print("Subnet: ");
+    Serial.println(WiFi.subnetMask());
   }
   
 }
@@ -167,6 +190,7 @@ void receivePacket() {
   if (strcmp(packet, "pulse") == 0) {
     Serial.println("Abriendo puerta ...");
     relayPulse(1000);
+    sendOK();
     return;
   }
 
@@ -182,7 +206,7 @@ void receivePacket() {
     if (token = strtok(NULL, ":\n\r")) {
       if (strlen(token) > 1) {
         saveValue(EEPROM_INDEX_WIFI_SSID, token);
-        Serial.printf("Guardado el nuevo ssid: %s\n", token);
+        sendOK();
       }
     }
     return;
@@ -192,14 +216,54 @@ void receivePacket() {
     if (token = strtok(NULL, ":\n\r")) {
       if (strlen(token) > 7) {
         saveValue(EEPROM_INDEX_WIFI_PASSWORD, token);
-        Serial.println("Guardada la nueva clave");
+        sendOK();
       }
     }
     return;
   } 
+
+  if (strcmp(token, "ip") == 0) {
+    if (token = strtok(NULL, ":\n\r")) {
+      saveValue(EEPROM_INDEX_WIFI_IP, token);
+      sendOK();
+    }
+    return;
+  } 
+
+  if (strcmp(token, "gateway") == 0) {
+    if (token = strtok(NULL, ":\n\r")) {
+      saveValue(EEPROM_INDEX_WIFI_GATEWAY, token);
+      sendOK();
+    }
+    return;
+  }
+
+  if (strcmp(token, "subnet") == 0) {
+    if (token = strtok(NULL, ":\n\r")) {
+      saveValue(EEPROM_INDEX_WIFI_SUBNET, token);
+      sendOK();
+    }
+    return;
+  }
 }
 
-void sendInfo() {
+void sendOK() {
+  Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+  Udp.write("Ok\n");
+  Udp.endPacket();
+}
+
+void sendConfigValue(int index, const char* name) {
+    char value[EEPROM_VALUE_SIZE + 1];
+    
+    readValue(index, value);
+    Udp.write(name);
+    Udp.write(": ");
+    Udp.write(value);
+    Udp.write("\n");
+  }
+
+void sendInfo() {  
   Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
 
   // Enviamos nuestro estado
@@ -213,7 +277,7 @@ void sendInfo() {
       Udp.write(WiFi.softAPSSID().c_str());
       Udp.write("\n"); 
       Udp.write("AP IP: ");
-      Udp.write(WiFi.softAPIP().toString().c_str());
+      Udp.write(WiFi.softAPIP().toString().c_str());      
       Udp.write("\n"); 
       break;
     default:  
@@ -227,9 +291,22 @@ void sendInfo() {
   } else {
     Udp.write("Mi IP es: ");
     Udp.write(WiFi.localIP().toString().c_str());
+    Udp.write("\n"); 
+    Udp.write("Puerta de enlace: ");
+    Udp.write(WiFi.gatewayIP().toString().c_str());
+    Udp.write("\n"); 
+    Udp.write("Mascara de red: ");
+    Udp.write(WiFi.subnetMask().toString().c_str());
     Udp.write("\n");  
   }
+
+  Udp.write("=== Configuracion ===\n");
+  sendConfigValue(EEPROM_INDEX_WIFI_SSID, "Nombre de la wifi (ssid)");
+  sendConfigValue(EEPROM_INDEX_WIFI_IP, "IP fija (ip)");
+  sendConfigValue(EEPROM_INDEX_WIFI_GATEWAY, "Puerta de enlace (gateway)");
+  sendConfigValue(EEPROM_INDEX_WIFI_SUBNET, "Mascara de red (subnet)");
   
+  Udp.write("\n"); 
   Udp.endPacket();
 }
 
@@ -328,7 +405,7 @@ void checkProg() {
         startAP(); 
         break;       
       } else {
-        delay(10);      
+        delay(100);      
       }
     }
   }

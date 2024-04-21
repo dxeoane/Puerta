@@ -28,6 +28,9 @@ void setup() {
   // Configuramos la EEPROM
   EEPROMSetup();
 
+  // Leemos la clave de la puerta guardada en la EEPROM
+  readDoorKey();
+
   // Intentamos conectarnos a la WiFi
   wifiConnect();  
 
@@ -59,9 +62,10 @@ void loop() {
 #define EEPROM_INDEX_WIFI_IP        2
 #define EEPROM_INDEX_WIFI_GATEWAY   3
 #define EEPROM_INDEX_WIFI_SUBNET    4
+#define EEPROM_INDEX_DOOR_KEY       5
 
 void EEPROMSetup() {
-  EEPROM.begin(5 * EEPROM_VALUE_SIZE);
+  EEPROM.begin(6 * EEPROM_VALUE_SIZE);
 }
 
 // Guarda un valor en la EEPROM. Si el tamaño excede EEPROM_VALUE_SIZE, se corta
@@ -91,9 +95,14 @@ void readValue(int index, char* value) {
   value[EEPROM_VALUE_SIZE] = 0;
 }
 
+char doorKey[EEPROM_VALUE_SIZE + 1];
+void readDoorKey(){
+  readValue(EEPROM_INDEX_DOOR_KEY, doorKey);
+}
+
 void wifiConnect() {
 
-  // Estos dos valores lod vamos a leer de la EEPROM deben tener como minimo el tamaño EEPROM_VALUE_SIZE + 1
+  // Estos dos valores los vamos a leer de la EEPROM deben tener como minimo el tamaño EEPROM_VALUE_SIZE + 1
   char ssid[EEPROM_VALUE_SIZE + 1];
   char password[EEPROM_VALUE_SIZE + 1];  
   
@@ -188,19 +197,23 @@ void receivePacket() {
   char *token = strtok(packet, ":\n\r"); 
     
   if (strcmp(packet, "pulse") == 0) {
-    Serial.println("Abriendo puerta ...");
-    relayPulse(1000);
-    sendOK();
+    if (token = strtok(NULL, ":\n\r")) {
+      if (strcmp(token, doorKey) == 0) {
+        Serial.println("Abriendo puerta ...");
+        relayPulse(1000);
+        sendOK();
+      }
+    }
     return;
-  }
+  }  
+
+  // A partir de aqui es necesario que estemos en modo de programación
+  if (state != STATE_PROG) return;
 
   if (strcmp(token, "info") == 0) {
     sendInfo();
     return;
   } 
-
-  // A partir de aqui es necesario que estemos en modo de programación
-  if (state != STATE_PROG) return;
     
   if (strcmp(token, "ssid") == 0) {
     if (token = strtok(NULL, ":\n\r")) {
@@ -241,6 +254,15 @@ void receivePacket() {
   if (strcmp(token, "subnet") == 0) {
     if (token = strtok(NULL, ":\n\r")) {
       saveValue(EEPROM_INDEX_WIFI_SUBNET, token);
+      sendOK();
+    }
+    return;
+  }
+
+  if (strcmp(token, "key") == 0) {
+    if (token = strtok(NULL, ":\n\r")) {
+      saveValue(EEPROM_INDEX_DOOR_KEY, token);
+      readValue(EEPROM_INDEX_DOOR_KEY, doorKey);
       sendOK();
     }
     return;
@@ -305,6 +327,7 @@ void sendInfo() {
   sendConfigValue(EEPROM_INDEX_WIFI_IP, "IP fija (ip)");
   sendConfigValue(EEPROM_INDEX_WIFI_GATEWAY, "Puerta de enlace (gateway)");
   sendConfigValue(EEPROM_INDEX_WIFI_SUBNET, "Mascara de red (subnet)");
+  sendConfigValue(EEPROM_INDEX_DOOR_KEY, "Clave de la puerta (key)");
   
   Udp.write("\n"); 
   Udp.endPacket();
@@ -384,10 +407,17 @@ void relayOff() {
   digitalWrite(RELAY, LOW);
 }
 
+
+unsigned long lastPulse = 0;
+
 void relayPulse(unsigned long ms){
-  relayOn();
-  delay(ms);
-  relayOff();
+  // Por si alguien envia muchos pulsos seguidos
+  if ((millis() - lastPulse) > 1000) {
+    relayOn();
+    delay(ms);
+    relayOff();
+    lastPulse = millis();
+  }
 }
 
 // Comprueba si el dispositivo tiene que entrar en modo de programación

@@ -31,6 +31,9 @@ void setup() {
   // Leemos la clave de la puerta guardada en la EEPROM
   readDoorKey();
 
+  // Leemso el ancho del pulso que debe hacer el relé
+  readPulseWidth();
+
   // Intentamos conectarnos a la WiFi
   wifiConnect();  
 
@@ -63,9 +66,10 @@ void loop() {
 #define EEPROM_INDEX_WIFI_GATEWAY   3
 #define EEPROM_INDEX_WIFI_SUBNET    4
 #define EEPROM_INDEX_DOOR_KEY       5
+#define EEPROM_INDEX_PULSE_WIDTH    6
 
 void EEPROMSetup() {
-  EEPROM.begin(6 * EEPROM_VALUE_SIZE);
+  EEPROM.begin(7 * EEPROM_VALUE_SIZE);
 }
 
 // Guarda un valor en la EEPROM. Si el tamaño excede EEPROM_VALUE_SIZE, se corta
@@ -200,7 +204,7 @@ void receivePacket() {
     if (token = strtok(NULL, ":\n\r")) {
       if (strcmp(token, doorKey) == 0) {
         Serial.println("Abriendo puerta ...");
-        relayPulse(1000);
+        relayPulse();
         sendOK();
       }
     }
@@ -267,6 +271,18 @@ void receivePacket() {
     }
     return;
   }
+
+  if (strcmp(token, "width") == 0) {
+    if (token = strtok(NULL, ":\n\r")) {
+      int l = atol(token);
+      if ((l > 499) && (l < 10000)) {
+        saveValue(EEPROM_INDEX_PULSE_WIDTH, token);
+        readPulseWidth();    
+        sendOK();
+      }
+    }
+    return;
+  }
 }
 
 void sendOK() {
@@ -328,6 +344,7 @@ void sendInfo() {
   sendConfigValue(EEPROM_INDEX_WIFI_GATEWAY, "Puerta de enlace (gateway)");
   sendConfigValue(EEPROM_INDEX_WIFI_SUBNET, "Mascara de red (subnet)");
   sendConfigValue(EEPROM_INDEX_DOOR_KEY, "Clave de la puerta (key)");
+  sendConfigValue(EEPROM_INDEX_PULSE_WIDTH, "Ancho en ms del pulso (width)");
   
   Udp.write("\n"); 
   Udp.endPacket();
@@ -407,14 +424,25 @@ void relayOff() {
   digitalWrite(RELAY, LOW);
 }
 
+unsigned long pulseWidth = 1000;
+void readPulseWidth(){  
+  char value[EEPROM_VALUE_SIZE + 1];
+  readValue(EEPROM_INDEX_PULSE_WIDTH, value);
+
+  int l = atol(value);
+  if ((l > 499) && (l < 10000)) {
+    pulseWidth = l;
+  }
+}
+
 
 unsigned long lastPulse = 0;
 
-void relayPulse(unsigned long ms){
+void relayPulse() {
   // Por si alguien envia muchos pulsos seguidos
   if ((millis() - lastPulse) > 1000) {
     relayOn();
-    delay(ms);
+    delay(pulseWidth);
     relayOff();
     lastPulse = millis();
   }
